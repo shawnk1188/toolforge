@@ -1,0 +1,109 @@
+# ============================================================
+# ToolForge: Spec-Driven Fine-Tuning for Precision Tool-Calling
+# ============================================================
+# Why pyproject.toml over requirements.txt?
+#   1. Single source of truth for project metadata, deps, and tool config
+#   2. Supports optional dependency groups (train, serve, dev)
+#   3. Makes the project pip-installable ("pip install -e .[dev]")
+#   4. Standard PEP 621 — works with pip, uv, poetry, hatch
+# ============================================================
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "toolforge"
+version = "0.1.0"
+description = "Spec-driven fine-tuning of small LLMs for precision tool-calling"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11,<3.14"
+authors = [
+    { name = "Sushanth", email = "shawnk1188@github.com" },
+]
+
+# --- Core dependencies (always installed) ---
+# These are needed for data processing and evaluation — the most common workflow
+dependencies = [
+    "pyyaml>=6.0",              # Config/spec file loading
+    "pydantic>=2.5",            # Data validation and schema enforcement
+    "datasets>=2.18",           # HuggingFace dataset loading and processing
+    "transformers>=4.40",       # Model loading, tokenization
+    "tokenizers>=0.19",         # Fast tokenization backend
+    "rich>=13.0",               # Beautiful CLI output and progress bars
+    "typer>=0.12",              # CLI framework (same as your Lumina project)
+    "jinja2>=3.1",              # Prompt template rendering
+]
+
+# --- Optional dependency groups ---
+# Install with: pip install -e ".[train]" or pip install -e ".[all]"
+
+[project.optional-dependencies]
+# Training dependencies (QLoRA + SFT + DPO)
+train = [
+    "peft>=0.10",               # LoRA/QLoRA adapter training
+    "trl>=0.8",                 # SFTTrainer + DPOTrainer
+    "bitsandbytes>=0.43",       # 4-bit quantization for QLoRA
+    "accelerate>=0.30",         # Distributed training + mixed precision
+    "wandb>=0.16",              # Experiment tracking
+    "scipy>=1.12",              # Required by some training optimizers
+]
+
+# MLX dependencies (Apple Silicon native — faster than MPS on M-series)
+mlx = [
+    "mlx>=0.12",                # Apple MLX framework
+    "mlx-lm>=0.12",            # MLX language model utilities
+]
+
+# Serving dependencies
+serve = [
+    "fastapi>=0.115",           # Inference API
+    "uvicorn>=0.29",            # ASGI server
+    "httpx>=0.27",              # Async HTTP client for health checks
+]
+
+# Development dependencies
+dev = [
+    "pytest>=8.0",              # Test runner
+    "pytest-cov>=5.0",          # Coverage reporting
+    "pytest-asyncio>=0.23",     # Async test support
+    "ruff>=0.4",                # Linter + formatter (replaces black+isort+flake8)
+    "pre-commit>=3.7",          # Git hooks for code quality
+    "mypy>=1.10",               # Static type checking
+]
+
+# Install everything
+all = [
+    "toolforge[train,mlx,serve,dev]",
+]
+
+# --- CLI entry points ---
+# After install, you can run: toolforge eval, toolforge train, etc.
+[project.scripts]
+toolforge = "toolforge.cli:app"
+
+# --- Tool configuration ---
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks integration tests requiring model downloads",
+]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.setuptools.packages.find]
+where = ["src"]

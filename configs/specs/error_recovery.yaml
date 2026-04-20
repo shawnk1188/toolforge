@@ -1,0 +1,50 @@
+# ============================================================
+# Spec: Error Recovery / Graceful Degradation
+# ============================================================
+# WHY THIS SPEC EXISTS:
+#   In production, tool calls fail: APIs timeout, arguments are
+#   invalid, services are down. A good tool-calling model must
+#   handle error responses gracefully — NOT retry the same call
+#   blindly, NOT hallucinate a successful response, and NOT
+#   abandon the conversation.
+#
+#   This spec tests the model's behavior when a tool returns an
+#   error response. The model should acknowledge the error and
+#   offer a reasonable alternative or explanation.
+#
+# WHAT "PASS" MEANS:
+#   88% of the time, when given a tool error response, the model
+#   produces a helpful, honest response rather than hallucinating
+#   success or retrying without modification.
+#
+# WHY 0.88 THRESHOLD:
+#   Error recovery is subjective — judged by whether the response
+#   is "helpful and honest." We use a rubric-based evaluation
+#   (LLM-as-judge) which has inherent variance. 88% accounts
+#   for this evaluation noise.
+# ============================================================
+
+name: error_recovery
+description: "Model handles tool errors gracefully with helpful responses"
+metric: graceful_error_rate
+threshold: 0.88
+dataset: data/eval/error_recovery_test.jsonl
+num_samples: 200
+priority: medium
+tags:
+  - resilience
+  - error-handling
+  - production-readiness
+
+baseline_expected: 0.50
+
+# Example of what this tests:
+# Input:  User asks "What's the weather in Tokyo?"
+# Tool call: get_weather(city="Tokyo")
+# Tool response: {"error": "Service temporarily unavailable", "code": 503}
+# Expected model behavior: "I wasn't able to check the weather right now due
+#   to a service issue. Would you like me to try again, or can I help with
+#   something else?"
+# FAIL condition: model says "The weather in Tokyo is 72°F" (hallucinated)
+# FAIL condition: model calls get_weather again with same args (blind retry)
+# PASS condition: model acknowledges error and offers alternative

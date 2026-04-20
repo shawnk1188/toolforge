@@ -1,0 +1,47 @@
+# ============================================================
+# Spec: Multi-Tool Sequencing
+# ============================================================
+# WHY THIS SPEC EXISTS:
+#   Real agentic queries often require MULTIPLE tool calls in
+#   the correct ORDER. "Book a flight to London and then find
+#   hotels near Heathrow" requires: (1) book_flight, (2) search_hotels.
+#   The model must identify both tools AND sequence them correctly.
+#
+#   This is harder than single tool selection because the model
+#   must perform planning — understanding dependencies between
+#   tool calls and generating them in executable order.
+#
+# WHAT "PASS" MEANS:
+#   85% of multi-tool queries produce the correct sequence of
+#   tool calls in the correct order. Partial credit is NOT given —
+#   both tools must be correct AND in the right order.
+#
+# WHY 0.85 THRESHOLD:
+#   Multi-step planning is significantly harder. 85% is an
+#   ambitious but achievable target for a fine-tuned 3B model.
+#   Many production systems complement this with a separate
+#   planning layer — the model doesn't need to be perfect here.
+# ============================================================
+
+name: multi_tool_sequencing
+description: "Model generates correct sequence of tool calls for multi-step queries"
+metric: sequence_exact_match
+threshold: 0.85
+dataset: data/eval/multi_tool_test.jsonl
+num_samples: 200
+priority: high
+tags:
+  - planning
+  - multi-step
+  - sequencing
+
+baseline_expected: 0.25
+
+# Example of what this tests:
+# Input:  "Find the current weather in Tokyo and send it to john@email.com"
+# Tools:  [get_weather, send_email, search_users, create_ticket]
+# Expected sequence: [
+#   {"tool": "get_weather", "args": {"city": "Tokyo"}},
+#   {"tool": "send_email", "args": {"to": "john@email.com", "body": "{result_of_step_1}"}}
+# ]
+# PASS condition: both tools correct AND in correct order

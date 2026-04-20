@@ -1,0 +1,42 @@
+# ============================================================
+# Spec: Tool Selection Accuracy
+# ============================================================
+# WHY THIS SPEC EXISTS:
+#   The most fundamental capability — given a user query and a set
+#   of available tools, the model must select the CORRECT tool name.
+#   Base models often pick "close but wrong" tools (e.g., calling
+#   `search_users` when the correct tool is `get_user_by_id`).
+#
+# WHAT "PASS" MEANS:
+#   95% of the time, the model selects the exact correct tool name
+#   from the available tool set. This is a hard exact-match metric —
+#   no partial credit for similar names.
+#
+# WHY 0.95 THRESHOLD:
+#   Production tool-calling agents need near-perfect routing.
+#   A 5% error rate means 1 in 20 tool calls goes to the wrong
+#   function — unacceptable for most business logic, but allows
+#   for genuinely ambiguous edge cases in the eval set.
+# ============================================================
+
+name: tool_selection
+description: "Model selects the correct tool name from available tools"
+metric: exact_match
+threshold: 0.95
+dataset: data/eval/tool_selection_test.jsonl
+num_samples: 500
+priority: critical
+tags:
+  - core
+  - routing
+  - function-calling
+
+# Expected baseline performance (base model without fine-tuning)
+# This is filled in after running the baseline evaluation
+baseline_expected: 0.55
+
+# Example of what this tests:
+# Input:  "What's the weather in San Francisco?"
+# Tools:  [get_weather, search_restaurants, book_flight, get_news]
+# Expected output: get_weather
+# Pass condition: model output == "get_weather" (exact match)

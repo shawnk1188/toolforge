@@ -1,0 +1,41 @@
+# ============================================================
+# Spec: Argument Extraction Accuracy
+# ============================================================
+# WHY THIS SPEC EXISTS:
+#   Selecting the right tool is necessary but not sufficient.
+#   The model must also extract the correct ARGUMENTS from the
+#   user's query and format them according to the tool's schema.
+#   Example: get_weather(city="San Francisco", unit="fahrenheit")
+#   — the model must extract "San Francisco" as the city AND
+#   infer "fahrenheit" as the default unit if not specified.
+#
+# WHAT "PASS" MEANS:
+#   90% of the time, all arguments match the expected values
+#   AND conform to the tool's JSON schema (correct types, required
+#   fields present, no extra fields).
+#
+# WHY 0.90 THRESHOLD (lower than tool_selection):
+#   Argument extraction is harder — it requires entity extraction,
+#   type coercion, and default value inference. 90% is production-
+#   quality for most agentic use cases.
+# ============================================================
+
+name: argument_accuracy
+description: "Model extracts correct argument values and types matching the tool schema"
+metric: json_schema_match
+threshold: 0.90
+dataset: data/eval/argument_accuracy_test.jsonl
+num_samples: 500
+priority: critical
+tags:
+  - core
+  - extraction
+  - schema-compliance
+
+baseline_expected: 0.40
+
+# Example of what this tests:
+# Input:  "Book a flight from NYC to London on March 15th, business class"
+# Tool:   book_flight(origin: str, destination: str, date: str, class: str)
+# Expected: {"origin": "NYC", "destination": "London", "date": "2026-03-15", "class": "business"}
+# Pass condition: all fields match expected values AND types are correct

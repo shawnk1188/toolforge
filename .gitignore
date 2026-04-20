@@ -1,0 +1,54 @@
+# ============================================================
+# ToolForge .gitignore
+# ============================================================
+
+# --- Data (never commit datasets — they're large and reproducible) ---
+data/raw/
+data/processed/
+data/eval/
+*.jsonl
+*.parquet
+!configs/**/*.jsonl
+
+# --- Artifacts (models, checkpoints, reports) ---
+artifacts/
+*.bin
+*.safetensors
+*.gguf
+*.pt
+*.pth
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# --- Experiment tracking ---
+wandb/
+mlruns/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Secrets (never commit) ---
+.env
+*.key
+*.pem

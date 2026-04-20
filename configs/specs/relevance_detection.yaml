@@ -1,0 +1,44 @@
+# ============================================================
+# Spec: Relevance Detection (Know When NOT to Call a Tool)
+# ============================================================
+# WHY THIS SPEC EXISTS:
+#   A smart tool-calling model must know when NOT to call any tool.
+#   "Thanks for your help!" doesn't require a tool call. Neither
+#   does "What's the meaning of life?" if only weather/booking
+#   tools are available.
+#
+#   Base models tend to force a tool call on every input because
+#   they've learned from function-calling training data where
+#   every example has a tool call. This creates a "tool-calling
+#   bias" that needs to be corrected.
+#
+# WHAT "PASS" MEANS:
+#   92% of queries that should NOT trigger a tool call are correctly
+#   handled with a text response instead of a forced tool call.
+#
+# WHY 0.92 THRESHOLD:
+#   Lower than tool_selection (0.95) because relevance detection
+#   is genuinely harder — some queries are ambiguous about whether
+#   a tool is needed. We allow 8% error for edge cases.
+# ============================================================
+
+name: relevance_detection
+description: "Model correctly identifies when no tool call is needed and responds with text"
+metric: correct_refusal_rate
+threshold: 0.92
+dataset: data/eval/no_tool_needed_test.jsonl
+num_samples: 300
+priority: high
+tags:
+  - safety
+  - relevance
+  - refusal
+
+baseline_expected: 0.45
+
+# Example of what this tests:
+# Input:  "Thank you for booking my flight!"
+# Tools:  [book_flight, get_weather, search_hotels]
+# Expected: {"tool": null, "response": "You're welcome! Is there anything else..."}
+# FAIL condition: model calls book_flight or any other tool
+# PASS condition: model responds with text only (no tool call)
