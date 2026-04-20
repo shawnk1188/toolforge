@@ -65,25 +65,96 @@ app.add_typer(data_app, name="data")
 
 
 @data_app.command("download")
-def data_download() -> None:
-    """Download raw datasets from HuggingFace Hub."""
-    console.print("\n[yellow]⚠ Data pipeline will be implemented in Stage 2[/yellow]\n")
+def data_download(
+    output_dir: str = typer.Option("data/raw", help="Output directory for raw data"),
+    max_examples: int = typer.Option(None, help="Limit examples per dataset (for dev speed)"),
+) -> None:
+    """Download raw datasets from HuggingFace Hub and convert to canonical format."""
+    from toolforge.data.download import download_and_convert
+
+    stats = download_and_convert(output_dir=output_dir, max_examples=max_examples)
+    console.print(f"\n[bold green]Download complete:[/bold green] {stats}")
 
 
 @data_app.command("prepare")
 def data_prepare(
-    config: str = typer.Option("configs/data/default.yaml", help="Data config path"),
+    max_examples: int = typer.Option(None, help="Limit total examples (for dev speed)"),
+    seed: int = typer.Option(42, help="Random seed for reproducibility"),
 ) -> None:
-    """Process raw data into training format."""
-    console.print("\n[yellow]⚠ Data pipeline will be implemented in Stage 2[/yellow]\n")
+    """Run the full data pipeline: download → validate → split → eval datasets."""
+    from toolforge.data.prepare import run_full_pipeline
+
+    run_full_pipeline(max_examples=max_examples, seed=seed)
 
 
 @data_app.command("validate")
 def data_validate(
-    config: str = typer.Option("configs/data/default.yaml", help="Data config path"),
+    input_path: str = typer.Argument(..., help="Path to .jsonl file to validate"),
+    keep_invalid: bool = typer.Option(False, help="Keep examples that fail checks"),
+    keep_duplicates: bool = typer.Option(False, help="Keep duplicate examples"),
 ) -> None:
-    """Validate processed dataset quality and schema compliance."""
-    console.print("\n[yellow]⚠ Data pipeline will be implemented in Stage 2[/yellow]\n")
+    """Validate a processed .jsonl dataset for quality and schema compliance."""
+    from toolforge.data.validate import validate_dataset
+
+    valid, report = validate_dataset(
+        input_path=input_path,
+        remove_duplicates=not keep_duplicates,
+        remove_invalid=not keep_invalid,
+    )
+    console.print(f"\n[bold green]Validation complete:[/bold green] {len(valid)} valid examples")
+
+
+@data_app.command("format")
+def data_format(
+    input_path: str = typer.Argument(
+        "data/processed/train.jsonl",
+        help="Path to .jsonl file with ToolCallingExample records",
+    ),
+    output_path: str = typer.Option(
+        "data/processed/train_formatted.jsonl",
+        help="Output path for chat-formatted .jsonl",
+    ),
+) -> None:
+    """Format training data into Llama 3.2 chat template for SFT."""
+    import json
+    from pathlib import Path
+
+    from toolforge.data.formatter import compute_token_stats, format_dataset_for_training
+    from toolforge.data.schema import ToolCallingExample
+
+    input_file = Path(input_path)
+    if not input_file.exists():
+        console.print(f"[red]File not found: {input_path}[/red]")
+        raise typer.Exit(1)
+
+    # Load examples
+    examples = []
+    with open(input_file) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                examples.append(ToolCallingExample(**json.loads(line)))
+
+    console.print(f"\n[bold blue]Formatting {len(examples)} examples[/bold blue]")
+
+    # Format
+    formatted = format_dataset_for_training(examples)
+
+    # Save
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_file, "w") as f:
+        for item in formatted:
+            f.write(json.dumps(item) + "\n")
+
+    # Stats
+    stats = compute_token_stats(formatted)
+    console.print(f"  Examples:           {stats['num_examples']}")
+    console.print(f"  Est. total tokens:  {stats['estimated_total_tokens']:,}")
+    console.print(f"  Est. avg tokens:    {stats['estimated_avg_tokens']:.0f}")
+    console.print(f"  Over 2048 tokens:   {stats['over_2048_tokens']}")
+    console.print(f"  Over 4096 tokens:   {stats['over_4096_tokens']}")
+    console.print(f"\n[bold green]Saved to:[/bold green] {output_path}")
 
 
 # --- Train commands ---

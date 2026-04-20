@@ -1,0 +1,78 @@
+# ============================================================
+# Data Pipeline Configuration
+# ============================================================
+# WHY THIS CONFIG EXISTS:
+#   Centralizes all data pipeline parameters so experiments are
+#   reproducible. Every data-related choice (which datasets, split
+#   ratios, validation thresholds) is captured here rather than
+#   scattered across function defaults.
+#
+# USAGE:
+#   toolforge data prepare  (uses these defaults)
+#   Or override at CLI: toolforge data prepare --max-examples 5000
+# ============================================================
+
+# --- Source Datasets ---
+# WHY HERMES:
+#   Glaive's original dataset went behind auth in 2025. NousResearch/Hermes
+#   includes the same Glaive data PLUS higher-quality curated examples.
+#   Three configs give us diversity: singleturn (cleanest), multiturn (richer
+#   context), and glaive (largest volume).
+datasets:
+  - name: hermes_singleturn
+    hf_path: "NousResearch/hermes-function-calling-v1"
+    hf_config: "func_calling_singleturn"
+    split: train
+    enabled: true
+
+  - name: hermes_multiturn
+    hf_path: "NousResearch/hermes-function-calling-v1"
+    hf_config: "func_calling"
+    split: train
+    enabled: true
+
+  - name: hermes_glaive
+    hf_path: "NousResearch/hermes-function-calling-v1"
+    hf_config: "glaive_func_calling"
+    split: train
+    enabled: true
+
+# --- Processing ---
+max_examples_per_dataset: null  # null = use all (set to 5000 for dev speed)
+seed: 42
+
+# --- Splitting ---
+split_ratios:
+  train: 0.85
+  val: 0.10
+  test: 0.05
+
+# --- Validation Thresholds ---
+validation:
+  min_query_length: 10
+  max_query_length: 2000
+  max_tools_per_example: 20
+  remove_duplicates: true
+  remove_invalid: true
+
+# --- Output Paths ---
+paths:
+  raw_data: "data/raw"
+  processed_data: "data/processed"
+  eval_data: "data/eval"
+
+# --- Eval Dataset Sizes ---
+# Max examples per eval dataset (capped by available data)
+eval_sizes:
+  tool_selection_test: 500
+  argument_accuracy_test: 500
+  hallucination_test: 500
+  no_tool_needed_test: 300
+  multi_tool_test: 200
+  error_recovery_test: 200
+
+# --- Chat Template ---
+formatter:
+  template: "llama3.2"  # Which chat template to use
+  chars_per_token_estimate: 3.5  # For token count estimation
+  max_sequence_length: 4096  # Flag examples exceeding this

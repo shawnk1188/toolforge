@@ -45,7 +45,7 @@ Spec-Driven:  Define specs → Measure baseline → Train → Verify specs pass
 
 ## Project Stages
 
-### Stage 1: Foundation & Specs ← **CURRENT**
+### Stage 1: Foundation & Specs ✅
 
 **Goal:** Production-grade project scaffold with behavioral specs and eval harness.
 
@@ -80,24 +80,66 @@ make test
 toolforge eval specs
 ```
 
-### Stage 2: Data Engineering (Next)
+### Stage 2: Data Engineering ✅ ← **CURRENT**
 
 **Goal:** Download, curate, and format tool-calling datasets for SFT training.
 
-- Download open-source datasets (Glaive Function Calling v2, BFCL, Gorilla)
-- Data validation pipeline with schema enforcement
-- Train/val/test split with stratification by tool type
-- Format conversion to ChatML/Llama chat template
-- Generate evaluation datasets for each behavioral spec
+**What was built:**
+- **Canonical data format** (`schema.py`) — Pydantic models for `ToolCallingExample`, `ToolDefinition`, `ToolCall` with 4 example types (SINGLE_TOOL, MULTI_TOOL, NO_TOOL, ERROR_HANDLING). Model validators catch referencing nonexistent tools at parse time.
+- **Download pipeline** (`download.py`) — Downloads from NousResearch/Hermes Function Calling v1 (3 configs: singleturn, multiturn, glaive). Hermes converter handles `<tool_call>` XML format. Brace-counting JSON parser for nested arguments.
+- **Validation pipeline** (`validate.py`) — 5 composable quality checks (query length, tool definitions, tool count, argument types, empty names). Content-hash deduplication. Rich quality report tables.
+- **Stratified splitting** (`prepare.py`) — Train/val/test split preserving type distribution. Synthesized error-handling examples from normal tool calls. Generates all 6 eval datasets for behavioral specs.
+- **Chat template formatter** (`formatter.py`) — Llama 3.2 chat template with correct special tokens (BOS/EOS/EOT/header tokens). Training format (full sequence) and inference format (prompt-only). Token count estimation.
+- **CLI wired up** — `toolforge data download`, `toolforge data prepare`, `toolforge data validate`, `toolforge data format`
+- **224 unit tests** covering schema validation, download parsing, quality checks, stratified splitting, and chat template formatting
+- **Data config** (`configs/data/default.yaml`) — all pipeline parameters centralized
 
-### Stage 3: Baseline Evaluation
+**Dataset summary:**
+
+| Source | Config | Raw | After Validation |
+|--------|--------|-----|-----------------|
+| Hermes singleturn | `func_calling_singleturn` | 1,893 | 973 |
+| Hermes multiturn | `func_calling` | 1,893 | 973 |
+| Hermes Glaive | `glaive_func_calling` | 5,209 | 1,294 |
+| **Total** | | **8,995** | **3,240** |
+
+**Split distribution:**
+
+| Split | Examples | single_tool | multi_tool | no_tool |
+|-------|----------|-------------|------------|---------|
+| Train | 2,757 | 1,611 | 899 | 247 |
+| Val | 323 | 189 | 105 | 29 |
+| Test | 160 | 94 | 52 | 14 |
+
+**Key design decisions:**
+- **NousResearch/Hermes over Glaive** — Glaive's original dataset went behind auth in 2025. Hermes includes the same Glaive data plus higher-quality curated examples.
+- **Aggressive validation** — 5,755 examples removed for short queries, deeply nested args, and duplicates. Quality > quantity for fine-tuning.
+- **Synthesized error examples** — No open-source error-handling dataset exists. We create 200 error examples from normal tool calls by removing tool calls and adding error context to queries.
+- **Brace-counting JSON parser** — Regex `\{.*?\}` fails on nested JSON. Our parser tracks brace depth and respects quoted strings — handles real-world Glaive/Hermes data correctly.
+
+**How to verify:**
+```bash
+# Run the full data pipeline (downloads ~9K examples, produces 3.2K validated)
+toolforge data prepare
+
+# Validate a specific file
+toolforge data validate data/processed/train.jsonl
+
+# Format for Llama 3.2 training
+toolforge data format data/processed/train.jsonl
+
+# Run all 224 tests
+make test
+```
+
+### Stage 3: Baseline Evaluation (Next)
 
 **Goal:** Run all 6 specs against the base Llama 3.2 3B model — establish the "before" numbers.
 
-- Load base model with HuggingFace transformers
-- Implement the `ModelFn` adapter for HuggingFace inference
-- Run full spec suite and publish baseline scores
-- All 6 specs expected to **FAIL** (confirming fine-tuning is needed)
+- Load base model with HuggingFace transformers (or MLX for Apple Silicon)
+- Implement the `ModelFn` adapter for inference
+- Run full spec suite against the eval datasets generated in Stage 2
+- Publish baseline scores — all 6 specs expected to **FAIL** (confirming fine-tuning is needed)
 
 ### Stage 4: Supervised Fine-Tuning (SFT)
 
@@ -179,7 +221,7 @@ source .venv/bin/activate
 # Validate specs are well-formed
 toolforge eval specs
 
-# Run all tests
+# Run all 224 tests
 make test
 
 # See all available commands
