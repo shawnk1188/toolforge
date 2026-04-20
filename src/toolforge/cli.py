@@ -39,14 +39,28 @@ def eval_run(
     specs_dir: str = typer.Option("configs/specs", help="Path to specs directory"),
     stage: str = typer.Option("baseline", help="Evaluation stage: baseline, sft, dpo, all"),
     model_path: str = typer.Option(None, help="Path to model or HF model ID"),
+    backend: str = typer.Option("mlx", help="Inference backend: mlx, ollama, dummy"),
     output: str = typer.Option("artifacts/reports", help="Output directory for reports"),
+    max_samples: int = typer.Option(None, help="Limit samples per spec (for quick checks)"),
 ) -> None:
     """Run behavioral specs against a model and generate a pass/fail report."""
-    console.print(f"\n[bold blue]ToolForge Eval[/bold blue] — Stage: {stage}")
-    console.print(f"  Specs dir:  {specs_dir}")
-    console.print(f"  Model:      {model_path or 'not specified'}")
-    console.print(f"  Output:     {output}")
-    console.print("\n[yellow]⚠ Eval harness will be implemented in Stage 3[/yellow]\n")
+    from toolforge.eval.harness import run_all_specs, save_report
+    from toolforge.eval.models import create_model_adapter
+
+    # Create model adapter
+    adapter = create_model_adapter(backend=backend, model_id=model_path)
+
+    # Run all specs
+    report = run_all_specs(
+        specs_dir=specs_dir,
+        model_fn=adapter,
+        stage=stage,
+        model_id=adapter.model_id,
+        max_samples=max_samples,
+    )
+
+    # Save report
+    save_report(report, output)
 
 
 @eval_app.command("specs")

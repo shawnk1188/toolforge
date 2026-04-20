@@ -122,13 +122,26 @@ def run_spec(
     # Evaluate each example
     num_passed = 0
     for example in examples:
-        prompt = example.get("prompt", "")
+        user_query = example.get("prompt", "")
         expected = example.get("expected", {})
         tool_schema = example.get("tool_schema", {})
+        system_prompt = example.get("system_prompt", "")
 
         try:
+            # Build a complete formatted prompt with tool context
+            # WHY: model_fn receives a pre-formatted string (Llama 3.2 chat template)
+            # that includes the system prompt with tool definitions. This way the
+            # model adapter doesn't need to know about eval dataset structure.
+            from toolforge.eval.models import build_eval_prompt
+
+            formatted_prompt = build_eval_prompt(
+                user_query=user_query,
+                system_prompt=system_prompt,
+                tool_schema=tool_schema,
+            )
+
             # Run model inference
-            predicted = model_fn(prompt)
+            predicted = model_fn(formatted_prompt)
 
             # Evaluate with the metric
             if metric_fn(predicted, expected, tool_schema):
