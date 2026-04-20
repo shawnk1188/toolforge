@@ -132,14 +132,53 @@ toolforge data format data/processed/train.jsonl
 make test
 ```
 
-### Stage 3: Baseline Evaluation (Next)
+### Stage 3: Baseline Evaluation ✅ ← **CURRENT**
 
 **Goal:** Run all 6 specs against the base Llama 3.2 3B model — establish the "before" numbers.
 
-- Load base model with HuggingFace transformers (or MLX for Apple Silicon)
-- Implement the `ModelFn` adapter for inference
-- Run full spec suite against the eval datasets generated in Stage 2
-- Publish baseline scores — all 6 specs expected to **FAIL** (confirming fine-tuning is needed)
+**What was built:**
+- **MLX model adapter** (`eval/models.py`) — Apple Silicon native inference via mlx-lm. Loads Llama 3.2 3B 4-bit (~1.8GB) and runs at ~40 tokens/sec on M1 Pro. Adapter Pattern: pluggable backends (MLX, Ollama, Dummy) behind uniform `ModelFn` interface.
+- **Prompt builder** — Constructs Llama 3.2 chat template prompts from eval dataset fields (user query + system prompt + tool schema). Separate from Stage 2's formatter because it works with raw dicts rather than Pydantic models.
+- **Output parser** — Extracts structured tool calls from raw model text using multi-strategy parsing: direct JSON → JSON extraction (brace counting) → JSON array → text fallback. Normalizes OpenAI-style, our format, and function_call wrapper formats.
+- **CLI wired up** — `toolforge eval run --backend mlx` runs the full spec suite
+- **264 unit tests** (40 new for model adapters, parsers, and factory)
+
+**Baseline Results (Llama 3.2 3B Instruct, 4-bit quantized, zero-shot):**
+
+| Spec | Score | Threshold | Status | Analysis |
+|------|-------|-----------|--------|----------|
+| `tool_selection` | **0.920** | 0.95 | ❌ FAIL | Close! Picks right tool 92% of the time but misses edge cases |
+| `argument_accuracy` | **0.560** | 0.90 | ❌ FAIL | Main weakness — often gets argument values/types wrong |
+| `hallucination_resistance` | **1.000** | 0.99 | ✅ PASS | Perfect! Never invents nonexistent tools |
+| `relevance_detection` | **0.256** | 0.92 | ❌ FAIL | Calls tools when it shouldn't — poor refusal behavior |
+| `multi_tool_sequencing` | **0.000** | 0.85 | ❌ FAIL | Cannot produce JSON arrays — needs format training |
+| `error_recovery` | **0.000** | 0.88 | ❌ FAIL | No graceful error handling — needs behavioral training |
+
+**Result: 1/6 specs pass.** This confirms fine-tuning is needed and identifies exactly WHERE:
+- **Already strong:** Tool selection (92%), hallucination resistance (100%)
+- **Needs SFT:** Argument accuracy (56%), relevance detection (26%)
+- **Needs format training:** Multi-tool (0%), error recovery (0%)
+
+**Key design decisions:**
+- **MLX over HuggingFace transformers** — 10x faster on Apple Silicon (unified memory vs CPU fallback). 50 samples × 6 specs completed in 15 minutes.
+- **4-bit quantized model** — Same model we'll fine-tune with QLoRA. Baseline measures the EXACT starting point.
+- **temperature=0.0** — Deterministic greedy decoding for reproducible baselines. No sampling randomness.
+- **Adapter Pattern** — Adding a new backend (e.g., vLLM for cloud) requires only implementing `load()` and `generate()`.
+
+**How to verify:**
+```bash
+# Run baseline with 50 samples per spec (~15 min on M1 Pro)
+toolforge eval run --backend mlx --max-samples 50
+
+# Quick smoke test with 5 samples (~2 min)
+toolforge eval run --backend mlx --max-samples 5
+
+# Test with dummy adapter (instant, all specs fail)
+toolforge eval run --backend dummy --max-samples 5
+
+# Run all 264 tests
+make test
+```
 
 ### Stage 4: Supervised Fine-Tuning (SFT)
 

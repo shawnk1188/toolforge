@@ -378,15 +378,19 @@ class MLXModelAdapter(BaseModelAdapter):
     def generate(self, prompt: str, max_tokens: int | None = None) -> str:
         """Generate text using MLX inference."""
         from mlx_lm import generate as mlx_generate
+        from mlx_lm.sample_utils import make_sampler
 
         max_tok = max_tokens or self.max_tokens
+
+        # mlx-lm >= 0.31 uses sampler objects instead of temp/top_p kwargs
+        sampler = make_sampler(temp=self.temperature)
 
         output = mlx_generate(
             model=self._model,
             tokenizer=self._tokenizer,
             prompt=prompt,
             max_tokens=max_tok,
-            temp=self.temperature,
+            sampler=sampler,
             verbose=False,
         )
 

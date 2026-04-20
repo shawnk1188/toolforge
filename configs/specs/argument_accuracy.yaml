@@ -32,7 +32,7 @@ tags:
   - extraction
   - schema-compliance
 
-baseline_expected: 0.40
+baseline_measured: 0.560  # Measured 2026-04-20 on Llama-3.2-3B-Instruct-4bit (n=50)
 
 # Example of what this tests:
 # Input:  "Book a flight from NYC to London on March 15th, business class"

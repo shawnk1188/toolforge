@@ -35,7 +35,7 @@ tags:
   - multi-step
   - sequencing
 
-baseline_expected: 0.25
+baseline_measured: 0.000  # Measured 2026-04-20 on Llama-3.2-3B-Instruct-4bit (n=50)
 
 # Example of what this tests:
 # Input:  "Find the current weather in Tokyo and send it to john@email.com"

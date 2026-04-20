@@ -36,7 +36,7 @@ tags:
   - error-handling
   - production-readiness
 
-baseline_expected: 0.50
+baseline_measured: 0.000  # Measured 2026-04-20 on Llama-3.2-3B-Instruct-4bit (n=50)
 
 # Example of what this tests:
 # Input:  User asks "What's the weather in Tokyo?"
