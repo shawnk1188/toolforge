@@ -330,11 +330,13 @@ class MLXModelAdapter(BaseModelAdapter):
     def __init__(
         self,
         model_id: str = "mlx-community/Llama-3.2-3B-Instruct-4bit",
+        adapter_path: str | None = None,
         max_tokens: int = 512,
         temperature: float = 0.0,
         **kwargs: Any,
     ):
         super().__init__(model_id, **kwargs)
+        self.adapter_path = adapter_path
         self.max_tokens = max_tokens
         self.temperature = temperature
         self._model = None
@@ -362,11 +364,22 @@ class MLXModelAdapter(BaseModelAdapter):
 
             from mlx_lm import load as mlx_load
 
-            self._model, self._tokenizer = mlx_load(self.model_id)
+            if self.adapter_path:
+                # Load base model + LoRA adapters (for SFT/DPO evaluation)
+                console.print(f"  [cyan]Loading adapters from:[/cyan] {self.adapter_path}")
+                self._model, self._tokenizer = mlx_load(
+                    self.model_id,
+                    adapter_path=self.adapter_path,
+                )
+            else:
+                # Load base model only (for baseline evaluation)
+                self._model, self._tokenizer = mlx_load(self.model_id)
+
             self._loaded = True
 
             elapsed = time.time() - start
-            console.print(f"  [green]Model loaded in {elapsed:.1f}s[/green]")
+            label = "Model + adapters" if self.adapter_path else "Model"
+            console.print(f"  [green]{label} loaded in {elapsed:.1f}s[/green]")
 
         except ImportError:
             raise RuntimeError(

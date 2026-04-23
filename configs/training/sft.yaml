@@ -1,0 +1,114 @@
+# ============================================================
+# SFT Training Configuration (MLX LoRA)
+# ============================================================
+# WHY THESE VALUES:
+#   Tuned for Llama 3.2 3B on M1 Pro 32GB. Each parameter has
+#   a documented rationale. Override via CLI or by copying this
+#   file and modifying the copy.
+#
+# USAGE:
+#   toolforge train sft                        # uses these defaults
+#   toolforge train sft --iters 500            # override iterations
+#   mlx_lm.lora --config configs/training/sft.yaml  # direct MLX CLI
+# ============================================================
+
+# --- Model ---
+model: "mlx-community/Llama-3.2-3B-Instruct-4bit"
+
+# --- Data ---
+# MLX expects a directory with train.jsonl, valid.jsonl, test.jsonl
+# in OpenAI chat format: {"messages": [...], "tools": [...]}
+data: "data/mlx"
+
+# --- Task ---
+train: true
+fine_tune_type: "lora"
+
+# --- LoRA Parameters ---
+# WHY RANK 8:
+#   Rank 8 is the sweet spot for tool-calling fine-tuning. Rank 4 is
+#   too constrained for learning JSON output patterns. Rank 16+ adds
+#   parameters without proportional quality gain on 3B models.
+#
+# WHY SCALE 20:
+#   scale = alpha / rank. With rank=8 and scale=20, effective alpha=160.
+#   This is a standard ratio that prevents the LoRA updates from being
+#   either too weak (underfitting) or too strong (catastrophic forgetting).
+#
+# WHY DROPOUT 0.05:
+#   Small dropout prevents overfitting on our 2.7K training set.
+#   0.0 risks memorization, 0.1+ risks underfitting on this data size.
+lora_parameters:
+  rank: 8
+  dropout: 0.05
+  scale: 20.0
+
+# --- Training Hyperparameters ---
+# WHY 1000 ITERATIONS:
+#   With batch_size=2 and 2757 examples, 1 epoch ≈ 1379 steps.
+#   1000 iters ≈ 0.72 epochs — enough to learn patterns without
+#   overfitting. We'll evaluate at each checkpoint and stop early
+#   if needed.
+iters: 1000
+batch_size: 2
+learning_rate: 1.0e-5
+
+# WHY LR 1e-5:
+#   Standard for LoRA fine-tuning of instruction-tuned models.
+#   Higher (5e-5) risks catastrophic forgetting of general capabilities.
+#   Lower (1e-6) won't learn enough in 1000 steps on 3B params.
+
+# --- Learning Rate Schedule ---
+# WHY COSINE WITH WARMUP:
+#   Warmup prevents the first few batches from creating large,
+#   destabilizing gradient updates. Cosine decay smoothly reduces
+#   LR to near-zero, giving fine-grained optimization at the end.
+lr_schedule:
+  name: "cosine_decay"
+  arguments: [1.0e-5, 1000]  # [init_lr, decay_steps] — matches iters
+  warmup: 50                 # 50 steps = ~5% of training
+  warmup_init: 1.0e-7
+
+# --- Checkpointing ---
+save_every: 200          # Save adapter every 200 steps
+steps_per_report: 10     # Log loss every 10 steps
+steps_per_eval: 100      # Evaluate on valid set every 100 steps
+# WHY 10 NOT 25:
+#   25 validation batches accumulate substantial Metal memory that isn't freed
+#   before training starts. 10 batches still gives a reliable loss estimate
+#   while leaving headroom for training forward+backward pass.
+val_batches: 10
+
+# --- Memory Optimization ---
+# WHY MAX_SEQ_LENGTH 2048:
+#   95%+ of our tool-calling examples fit in 2048 tokens.
+#   Longer sequences waste memory. Examples over 2048 are truncated.
+max_seq_length: 2048
+
+# WHY GRAD_CHECKPOINT TRUE:
+#   Metal GPU memory management on Apple Silicon is less granular than CUDA.
+#   After validation pass + training forward pass, peak memory can exceed
+#   Metal's allocation even on 32GB. Gradient checkpointing trades ~20%
+#   compute time for 40-60% less activation memory — essential for stable
+#   training on M1/M2/M3 with unified memory.
+grad_checkpoint: true
+
+# --- Output ---
+adapter_path: "artifacts/sft/adapters"
+
+# --- Prompt Masking ---
+# WHY MASK_PROMPT TRUE:
+#   Only compute loss on the assistant's response, not the system prompt
+#   or user query. This focuses the model's learning on generating correct
+#   tool calls rather than memorizing prompt patterns.
+mask_prompt: true
+
+# --- Reproducibility ---
+seed: 42
+
+# --- Num LoRA Layers ---
+# WHY 16:
+#   Apply LoRA to all 16 transformer layers. For 3B models, the
+#   overhead is minimal and gives the best quality. For larger models
+#   (70B+), you'd reduce this to save memory.
+num_layers: 16

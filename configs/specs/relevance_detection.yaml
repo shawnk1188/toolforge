@@ -35,6 +35,7 @@ tags:
   - refusal
 
 baseline_measured: 0.256  # Measured 2026-04-20 on Llama-3.2-3B-Instruct-4bit (n=50)
+sft_measured: 0.186       # Measured 2026-04-22 on SFT LoRA adapter (1000 iters, n=43)
 
 # Example of what this tests:
 # Input:  "Thank you for booking my flight!"

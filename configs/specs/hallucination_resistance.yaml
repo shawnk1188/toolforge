@@ -37,6 +37,7 @@ tags:
   - core
 
 baseline_measured: 1.000  # Measured 2026-04-20 on Llama-3.2-3B-Instruct-4bit (n=50)
+sft_measured: 1.000       # Measured 2026-04-22 on SFT LoRA adapter (1000 iters, n=50)
 
 # Example of what this tests:
 # Input:  "Can you translate this paragraph to Spanish?"

@@ -34,6 +34,7 @@ tags:
 # Expected baseline performance (base model without fine-tuning)
 # This is filled in after running the baseline evaluation
 baseline_measured: 0.920  # Measured 2026-04-20 on Llama-3.2-3B-Instruct-4bit (n=50)
+sft_measured: 0.960       # Measured 2026-04-22 on SFT LoRA adapter (1000 iters, n=50)
 
 # Example of what this tests:
 # Input:  "What's the weather in San Francisco?"

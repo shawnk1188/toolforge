@@ -80,7 +80,7 @@ make test
 toolforge eval specs
 ```
 
-### Stage 2: Data Engineering ✅ ← **CURRENT**
+### Stage 2: Data Engineering ✅
 
 **Goal:** Download, curate, and format tool-calling datasets for SFT training.
 
@@ -128,11 +128,11 @@ toolforge data validate data/processed/train.jsonl
 # Format for Llama 3.2 training
 toolforge data format data/processed/train.jsonl
 
-# Run all 224 tests
+# Run all 334 tests
 make test
 ```
 
-### Stage 3: Baseline Evaluation ✅ ← **CURRENT**
+### Stage 3: Baseline Evaluation ✅
 
 **Goal:** Run all 6 specs against the base Llama 3.2 3B model — establish the "before" numbers.
 
@@ -180,15 +180,80 @@ toolforge eval run --backend dummy --max-samples 5
 make test
 ```
 
-### Stage 4: Supervised Fine-Tuning (SFT)
+### Stage 4: Supervised Fine-Tuning (SFT) ✅ ← **CURRENT**
 
-**Goal:** QLoRA fine-tuning on the curated dataset, targeting the 3 critical specs.
+**Goal:** LoRA fine-tuning on the curated dataset using MLX native training on Apple Silicon.
 
-- QLoRA configuration (4-bit quantization, LoRA rank/alpha tuning)
-- Training with HuggingFace TRL `SFTTrainer` + PEFT
-- Hyperparameter sweep tracked with W&B
-- Checkpoint selection based on spec pass rate (not just loss)
-- Expected: 4-5/6 specs pass after SFT
+**What was built:**
+- **MLX format converter** (`data/mlx_format.py`) — Converts canonical ToolCallingExample format to OpenAI chat format for MLX's ChatDataset. The tokenizer's `apply_chat_template` handles Llama 3.2 special tokens automatically — more correct than manual template formatting.
+- **SFT training module** (`training/sft.py`) — `SFTConfig` dataclass loaded from YAML, cosine decay LR schedule with warmup, gradient checkpointing for Apple Silicon memory safety, SSL proxy patching for corporate environments.
+- **Training config** (`configs/training/sft.yaml`) — Fully documented hyperparameters with rationale for every choice.
+- **LoRA adapter evaluation** — MLX adapter extends `MLXModelAdapter` with `adapter_path` parameter. Eval harness loads base model + LoRA weights for spec evaluation.
+- **334 unit tests** (70 new for MLX format conversion and SFT config)
+- **CLI wired up** — `toolforge train sft` with `--iters`, `--batch-size`, `--lr`, `--skip-data-prep` overrides
+
+**Training Details:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Framework | MLX LoRA (Apple Silicon native) | 10x faster than CPU HuggingFace on M1/M2/M3 |
+| Model | Llama 3.2 3B Instruct 4-bit | 1.8GB base + 7MB LoRA adapters |
+| LoRA rank | 8 | Good quality/speed trade-off for 3B model |
+| LoRA scale (alpha) | 20.0 | Amplifies LoRA signal (alpha/rank = 2.5) |
+| LR schedule | Cosine decay (1e-5 → 0) | Warmup 50 steps, prevents early instability |
+| Iterations | 1000 | Full convergence on 2.7K training examples |
+| Batch size | 2 | Memory-safe for 32GB unified memory |
+| Gradient checkpointing | ✅ | Essential for Metal GPU memory management |
+| Peak memory | 7.6 GB | Comfortable on 32GB M1 Pro |
+| Training time | ~5.7 hours | On M1 Pro 32GB |
+
+**Training Curve (val loss):**
+```
+Iter    1: 1.616  (starting point)
+Iter  100: 0.056  (rapid convergence)
+Iter  300: 0.038  (best checkpoint)
+Iter  500: 0.041  (stable plateau)
+Iter 1000: 0.084  (final — 95% reduction from start)
+```
+
+**SFT Results vs Baseline (n=50):**
+
+| Spec | Baseline | SFT | Threshold | Status | Δ |
+|------|----------|-----|-----------|--------|---|
+| `tool_selection` | 0.920 | **0.960** | 0.95 | ✅ PASS | +4.3% |
+| `hallucination_resistance` | 1.000 | **1.000** | 0.99 | ✅ PASS | maintained |
+| `argument_accuracy` | 0.560 | **0.800** | 0.90 | ❌ FAIL | **+42.9%** |
+| `relevance_detection` | 0.256 | **0.186** | 0.92 | ❌ FAIL | -27.3% |
+| `multi_tool_sequencing` | 0.000 | **0.000** | 0.85 | ❌ FAIL | — |
+| `error_recovery` | 0.000 | **0.060** | 0.88 | ❌ FAIL | +6.0% |
+
+**Result: 2/6 specs pass** (up from 1/6 baseline). SFT pushed tool_selection over its 0.95 threshold and boosted argument_accuracy by 43% (0.560 → 0.800). Error recovery showed its first signs of life (0% → 6%). The remaining specs need preference tuning (DPO) where the model learns from its own mistakes.
+
+**Analysis — what SFT can and can't do:**
+- **SFT excels at:** Learning output FORMAT (JSON tool calls), improving tool NAME selection, getting argument values closer to correct. argument_accuracy jumped 43% purely from seeing correct examples.
+- **SFT struggles with:** BEHAVIORAL changes (knowing when NOT to call tools, graceful error recovery). Relevance detection actually regressed (-27%) — the model became MORE eager to call tools after training on tool-calling examples.
+- **Multi-tool sequencing at 0%:** The model still can't produce JSON arrays. This is a format issue that DPO with targeted preference pairs can address.
+- **Error recovery at 6%:** First signs of learning. The synthesized error examples in training data are starting to take effect, but the model needs contrastive training to fully learn this behavior.
+
+**Key design decisions:**
+- **MLX native LoRA over QLoRA+bitsandbytes** — bitsandbytes requires CUDA GPUs. MLX LoRA runs natively on Apple Silicon unified memory with comparable quality.
+- **Gradient checkpointing + cache clearing** — Metal GPU memory management is less granular than CUDA. Without these, training OOMs at 32GB. With them, peak stays at 7.6GB.
+- **mask_prompt: true** — Only compute loss on assistant responses, not on system/user messages. The model learns to GENERATE tool calls, not to parrot prompts.
+- **Cosine decay with warmup** — Warmup prevents early instability when LoRA weights are random. Cosine decay provides smooth convergence.
+- **5 checkpoint saves** — Every 200 iterations. Allows selecting the best checkpoint (iter 300 had lowest val loss) if the final checkpoint overfits.
+
+**How to verify:**
+```bash
+# Run SFT training (full: ~6 hours on M1 Pro, quick test: ~5 min)
+toolforge train sft                          # full 1000 iterations
+toolforge train sft --iters 10              # quick 10-iteration test
+
+# Evaluate SFT checkpoint
+toolforge eval run --backend mlx --adapter-path artifacts/sft/adapters --max-samples 20
+
+# Run all 334 tests
+make test
+```
 
 ### Stage 5: Preference Tuning (DPO)
 
@@ -215,8 +280,8 @@ make test
 |---|---|---|
 | Language | Python 3.12 | ML ecosystem compatibility |
 | Validation | Pydantic v2 | Schema enforcement at boundaries |
-| Training | TRL + PEFT + bitsandbytes | Industry standard for QLoRA/DPO |
-| Tracking | Weights & Biases | Training curves, hyperparameter comparison |
+| Training | MLX LoRA (Apple Silicon native) | 10x faster than CPU on M1/M2/M3 |
+| Tracking | Built-in loss logging | Training curves via mlx-lm reports |
 | CLI | Typer | Auto-generated help, type-safe arguments |
 | Testing | pytest | Spec validation + metric correctness |
 | Containers | Podman | Rootless, daemonless, OCI-compliant |
@@ -260,7 +325,7 @@ source .venv/bin/activate
 # Validate specs are well-formed
 toolforge eval specs
 
-# Run all 224 tests
+# Run all 334 tests
 make test
 
 # See all available commands

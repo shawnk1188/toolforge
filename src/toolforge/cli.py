@@ -39,6 +39,7 @@ def eval_run(
     specs_dir: str = typer.Option("configs/specs", help="Path to specs directory"),
     stage: str = typer.Option("baseline", help="Evaluation stage: baseline, sft, dpo, all"),
     model_path: str = typer.Option(None, help="Path to model or HF model ID"),
+    adapter_path: str = typer.Option(None, help="Path to LoRA adapter directory (for SFT/DPO eval)"),
     backend: str = typer.Option("mlx", help="Inference backend: mlx, ollama, dummy"),
     output: str = typer.Option("artifacts/reports", help="Output directory for reports"),
     max_samples: int = typer.Option(None, help="Limit samples per spec (for quick checks)"),
@@ -47,8 +48,12 @@ def eval_run(
     from toolforge.eval.harness import run_all_specs, save_report
     from toolforge.eval.models import create_model_adapter
 
-    # Create model adapter
-    adapter = create_model_adapter(backend=backend, model_id=model_path)
+    # Create model adapter (optionally with LoRA adapters)
+    adapter = create_model_adapter(
+        backend=backend,
+        model_id=model_path,
+        adapter_path=adapter_path,
+    )
 
     # Run all specs
     report = run_all_specs(
@@ -179,9 +184,21 @@ app.add_typer(train_app, name="train")
 @train_app.command("sft")
 def train_sft(
     config: str = typer.Option("configs/training/sft.yaml", help="SFT config path"),
+    iters: int = typer.Option(None, help="Override training iterations"),
+    batch_size: int = typer.Option(None, help="Override batch size"),
+    learning_rate: float = typer.Option(None, "--lr", help="Override learning rate"),
+    skip_data_prep: bool = typer.Option(False, help="Skip data conversion (if already done)"),
 ) -> None:
-    """Run supervised fine-tuning with QLoRA."""
-    console.print("\n[yellow]⚠ SFT training will be implemented in Stage 4[/yellow]\n")
+    """Run supervised fine-tuning with MLX LoRA on Apple Silicon."""
+    from toolforge.training.sft import run_sft_pipeline
+
+    run_sft_pipeline(
+        config_path=config,
+        iters=iters,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        skip_data_prep=skip_data_prep,
+    )
 
 
 @train_app.command("dpo")
