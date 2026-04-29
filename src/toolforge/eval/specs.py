@@ -11,9 +11,8 @@ WHY THIS MODULE EXISTS:
   so any invalid spec file is caught immediately with a clear error message.
 
 DESIGN PATTERN:
-  Parse → Validate → Use (same "validate at boundary" pattern from your
-  Lumina project — validate YAML at load time, then trust the typed
-  objects downstream).
+  Parse → Validate → Use (the "validate at boundary" pattern —
+  validate YAML at load time, then trust the typed objects downstream).
 """
 
 from __future__ import annotations

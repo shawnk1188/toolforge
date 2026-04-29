@@ -32,7 +32,7 @@ dependencies = [
     "transformers>=4.40",       # Model loading, tokenization
     "tokenizers>=0.19",         # Fast tokenization backend
     "rich>=13.0",               # Beautiful CLI output and progress bars
-    "typer>=0.12",              # CLI framework (same as your Lumina project)
+    "typer>=0.12",              # CLI framework with auto-generated --help
     "jinja2>=3.1",              # Prompt template rendering
 ]
 

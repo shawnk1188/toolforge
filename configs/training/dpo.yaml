@@ -1,0 +1,96 @@
+# ============================================================
+# DPO Training Configuration (v2 — fixed catastrophic forgetting)
+# ============================================================
+#
+# WHY DPO AFTER SFT:
+#   SFT taught the model the right OUTPUT FORMAT (JSON tool calls).
+#   DPO teaches BEHAVIORAL preferences:
+#     - When to call tools vs. respond with text (relevance_detection)
+#     - How to handle tool errors gracefully (error_recovery)
+#     - How to sequence multiple tool calls (multi_tool_sequencing)
+#     - How to get argument values exactly right (argument_accuracy)
+#
+# WHAT WENT WRONG (v1):
+#   DPO v1 caused catastrophic forgetting: tool_selection 0.96→0.40,
+#   argument_accuracy 0.80→0.06, hallucination_resistance 1.00→0.80.
+#   Root causes:
+#     1. No gradient clipping — single batches with large losses destroyed weights
+#     2. No early stopping — training continued past the point of degradation
+#     3. beta=0.1 too aggressive — model diverged too far from reference
+#     4. No training curve logging — couldn't diagnose convergence issues
+#
+# FIXES IN v2:
+#   1. Gradient clipping (max_norm=1.0) — prevents catastrophic single-step forgetting
+#   2. Early stopping (patience=50) — stops when reward margin stops improving
+#   3. Higher beta (0.5) — stronger KL penalty keeps model closer to SFT
+#   4. Label smoothing (0.1) — conservative DPO prevents overconfidence
+#   5. Training curve logging — metrics saved to training_log.json for diagnosis
+
+# Model paths
+# WHY sft_v2: After Stage 4b (continued SFT with augmented data), the
+# improved SFT checkpoint lives at artifacts/sft_v2/adapters. If you
+# haven't run Stage 4b yet, change this to "artifacts/sft/adapters".
+model: "mlx-community/Llama-3.2-3B-Instruct-4bit"
+sft_adapter_path: "artifacts/sft_v2/adapters"
+adapter_path: "artifacts/dpo/adapters"
+
+# DPO hyperparameters
+# WHY BETA 0.5:
+#   Controls divergence from reference. Higher = more conservative.
+#   v1 at β=0.1: margin exploded, catastrophic forgetting (0/6 pass)
+#   v1 at β=0.3: still too aggressive for 139 pairs
+#   v2 at β=0.5: strong KL penalty. The model can only make small
+#   preference adjustments per step, preserving SFT capabilities.
+beta: 0.5
+
+# WHY LABEL_SMOOTHING 0.1:
+#   Conservative DPO — mixes in a small probability of the "wrong" label.
+#   L = -((1-ε)·log σ(β·Δ) + ε·log σ(-β·Δ))
+#   Prevents the model from becoming too confident on training pairs.
+label_smoothing: 0.1
+
+# Training
+# WHY 40 ITERATIONS:
+#   With conservative settings (β=0.5, grad_clip=1.0, lr=1e-6),
+#   40 iterations is ~0.29 epochs over the preference pairs.
+#   Early stopping will halt sooner if margin plateaus.
+iters: 40
+batch_size: 1
+
+# WHY LR 1e-6:
+#   The most conservative LR we've tried. Previous experiments:
+#     - 5e-6: catastrophic forgetting (v1)
+#     - 2e-6: still some forgetting with β=0.3
+#   1e-6 with β=0.5 and grad_clip=1.0 gives very gentle preference updates.
+learning_rate: 1.0e-6
+max_seq_length: 512
+grad_checkpoint: true
+seed: 42
+
+# Stability (NEW in v2)
+# WHY GRAD_CLIP_NORM 1.0:
+#   Prevents any single batch from producing a gradient larger than L2=1.0.
+#   This is the #1 fix for catastrophic forgetting — without it, a single
+#   unlucky batch can destroy the model's tool_selection capability in one step.
+grad_clip_norm: 1.0
+
+# WHY EARLY_STOPPING_PATIENCE 50:
+#   If the reward margin doesn't improve for 50 steps worth of reports
+#   (i.e., 10 report intervals at steps_per_report=5), training stops.
+#   This prevents training past the point where DPO starts hurting.
+early_stopping_patience: 50
+
+# LoRA parameters (same as SFT for compatibility)
+lora_parameters:
+  rank: 8
+  dropout: 0.05
+  scale: 20.0
+num_layers: 16
+
+# Logging and checkpointing
+steps_per_report: 5
+steps_per_eval: 20
+save_every: 20
+
+# Data
+data_path: "data/dpo/train.jsonl"

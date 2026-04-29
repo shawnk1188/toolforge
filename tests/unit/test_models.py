@@ -172,28 +172,40 @@ class TestParseOutput:
         assert result == {"tool": "get_weather", "arguments": {"city": "SF"}}
 
     def test_json_array_multi_tool(self, dummy_adapter):
-        """A JSON array embedded in text (no leading '{') should produce multi-tool format.
+        """A JSON array embedded in text should produce multi-tool format.
 
         WHY THIS INPUT:
-          parse_output tries strategies in order: direct JSON parse, extract
-          first JSON object, then extract JSON array. A bare array like
-          '[{...}, {...}]' will have its first object extracted by strategy 2
-          before strategy 3 runs. To exercise the array path, the array must
-          appear in text where no standalone '{' precedes the '['.
+          parse_output now correctly prioritizes array extraction over single-
+          object extraction. When the model outputs [{"name": "f1"}, {"name": "f2"}],
+          the parser should return {"tools": [...]} — not just the first tool.
         """
         raw = 'Here are the calls: [{"name": "f1", "arguments": {}}, {"name": "f2", "arguments": {}}]'
         result = dummy_adapter.parse_output(raw)
-        # Strategy 2 finds the first { (inside the array) before strategy 3.
-        # The actual behavior: strategy 2 extracts the first JSON object.
-        assert result == {"tool": "f1", "arguments": {}}
+        # Array extraction now runs before single-object extraction
+        assert result == {"tools": [{"tool": "f1", "arguments": {}}, {"tool": "f2", "arguments": {}}]}
 
-    def test_json_array_standalone_extracts_first(self, dummy_adapter):
-        """A bare JSON array is not a dict, so direct parse fails; extract-JSON finds the first object."""
+    def test_json_array_standalone_multi_tool(self, dummy_adapter):
+        """A bare JSON array should be parsed as multi-tool output."""
         raw = '[{"name": "f1", "arguments": {}}, {"name": "f2", "arguments": {}}]'
         result = dummy_adapter.parse_output(raw)
-        # Strategy 1 (direct parse) returns None because result is a list, not dict.
-        # Strategy 2 (extract JSON) finds first '{' and extracts the first object.
-        assert result == {"tool": "f1", "arguments": {}}
+        # Strategy 1 (direct parse) now handles lists, returning multi-tool format
+        assert result == {"tools": [{"tool": "f1", "arguments": {}}, {"tool": "f2", "arguments": {}}]}
+
+    def test_single_element_array_returns_single_tool(self, dummy_adapter):
+        """A single-element JSON array should unwrap to single-tool format.
+
+        WHY: The model sometimes wraps single calls in [...]. Metrics like
+        exact_match expect {"tool": ...}, not {"tools": [...]}.
+        """
+        raw = '[{"name": "get_weather", "arguments": {"city": "NYC"}}]'
+        result = dummy_adapter.parse_output(raw)
+        assert result == {"tool": "get_weather", "arguments": {"city": "NYC"}}
+
+    def test_single_element_array_in_text(self, dummy_adapter):
+        """Single-element array embedded in text should also unwrap."""
+        raw = 'Sure: [{"name": "search", "arguments": {"q": "test"}}]'
+        result = dummy_adapter.parse_output(raw)
+        assert result == {"tool": "search", "arguments": {"q": "test"}}
 
     def test_plain_text_no_json(self, dummy_adapter):
         """When the model declines to call a tool, output should become a response dict."""

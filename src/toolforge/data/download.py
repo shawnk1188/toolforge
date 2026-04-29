@@ -496,11 +496,11 @@ def download_and_convert(
         console.print(f"\n[bold blue]Downloading:[/bold blue] {ds_config['hf_name']}")
 
         try:
-            # Configure SSL for corporate proxy environments
-            # WHY: Corporate proxies (e.g., Netskope, Zscaler) intercept HTTPS
-            # with a self-signed root CA. The huggingface_hub library uses httpx
-            # which doesn't trust the system keychain by default. We disable
-            # SSL verification for the download only.
+            # Configure SSL for proxy environments
+            # WHY: Some network proxies intercept HTTPS with a custom root CA.
+            # The huggingface_hub library uses httpx which doesn't trust the
+            # system keychain by default. We disable SSL verification for the
+            # download only.
             import os
 
             os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"

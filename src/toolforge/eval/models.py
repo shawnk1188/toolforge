@@ -100,29 +100,47 @@ class BaseModelAdapter(ABC):
         """
         text = raw_text.strip()
 
-        # Strategy 1: Direct JSON parse
+        # Strategy 1: Direct JSON parse (handles both dict and list)
         parsed = self._try_json_parse(text)
-        if parsed:
+        if parsed is not None:
+            if isinstance(parsed, list):
+                normalized = [self._normalize_parsed(p) for p in parsed if isinstance(p, dict)]
+                # Single-element arrays → treat as single tool call (not multi-tool)
+                # WHY: The model sometimes wraps single calls in [...]. Returning
+                # {"tools": [...]} would break metrics that expect {"tool": ...}.
+                if len(normalized) == 1:
+                    return normalized[0]
+                return {"tools": normalized}
             return self._normalize_parsed(parsed)
 
-        # Strategy 2: Extract JSON from text (find first { ... } block)
+        # Strategy 2: Extract JSON array FIRST (multi-tool)
+        # WHY BEFORE SINGLE-OBJECT:
+        #   When model outputs [{"name": "f1", ...}, {"name": "f2", ...}],
+        #   _try_extract_json would find the first { inside the array and
+        #   return only the first tool call — silently dropping all other
+        #   tools. Array extraction must come first to avoid this bug.
+        parsed = self._try_extract_json_array(text)
+        if parsed:
+            normalized = [self._normalize_parsed(p) for p in parsed]
+            if len(normalized) == 1:
+                return normalized[0]
+            return {"tools": normalized}
+
+        # Strategy 3: Extract single JSON object from text
         parsed = self._try_extract_json(text)
         if parsed:
             return self._normalize_parsed(parsed)
 
-        # Strategy 3: Extract JSON array (multi-tool)
-        parsed = self._try_extract_json_array(text)
-        if parsed:
-            return {"tools": [self._normalize_parsed(p) for p in parsed]}
-
         # Fallback: treat as text response (model declined to call a tool)
         return {"response": text}
 
-    def _try_json_parse(self, text: str) -> dict | None:
-        """Try parsing the entire text as JSON."""
+    def _try_json_parse(self, text: str) -> dict | list | None:
+        """Try parsing the entire text as JSON (dict or list)."""
         try:
             result = json.loads(text)
             if isinstance(result, dict):
+                return result
+            if isinstance(result, list) and all(isinstance(r, dict) for r in result):
                 return result
         except (json.JSONDecodeError, ValueError):
             pass
@@ -293,6 +311,8 @@ def build_eval_prompt(
             f"\n\nYou have access to the following tools:\n{tools_json}\n\n"
             "When you need to call a tool, respond ONLY with a JSON object in this exact format:\n"
             '{"name": "<tool_name>", "arguments": {<arg_name>: <arg_value>, ...}}\n\n'
+            "If multiple tools are needed, respond with a JSON array of tool calls:\n"
+            '[{"name": "<tool_1>", "arguments": {...}}, {"name": "<tool_2>", "arguments": {...}}]\n\n'
             "If no tool is needed, respond normally with text. "
             "Do NOT add any explanation before or after the JSON."
         )
@@ -348,7 +368,7 @@ class MLXModelAdapter(BaseModelAdapter):
         start = time.time()
 
         try:
-            # Patch httpx for corporate proxy SSL (Netskope/Zscaler intercept)
+            # Patch httpx SSL verification for proxy environments
             try:
                 import httpx
 

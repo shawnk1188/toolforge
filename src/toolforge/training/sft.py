@@ -103,6 +103,7 @@ class SFTConfig:
         return cls(
             model=raw.get("model", cls.model),
             data_dir=raw.get("data", cls.data_dir),
+            processed_dir=raw.get("processed_dir", cls.processed_dir),
             lora_rank=lora_params.get("rank", cls.lora_rank),
             lora_dropout=lora_params.get("dropout", cls.lora_dropout),
             lora_scale=lora_params.get("scale", cls.lora_scale),
@@ -191,7 +192,7 @@ def run_training(config: SFTConfig) -> Path:
     """
     console.print("\n[bold blue]Step 2/3: LoRA Fine-Tuning[/bold blue]")
 
-    # Patch SSL for corporate proxy
+    # Patch SSL for proxy environments
     try:
         import httpx
 
@@ -315,6 +316,172 @@ def run_sft_pipeline(
             f"Next steps:\n"
             f"  1. Evaluate: toolforge eval run --backend mlx --model-path {adapter_dir}\n"
             f"  2. Compare: check artifacts/reports/ for baseline vs SFT scores",
+            title="Done",
+            border_style="green",
+        )
+    )
+
+    return adapter_dir
+
+
+# ============================================================
+# Stage 4b: Continue SFT with Augmented Data
+# ============================================================
+
+
+def run_sft_continue(
+    config_path: str | Path = "configs/training/sft_continue.yaml",
+    resume_adapter: str | Path = "artifacts/sft/adapters",
+    iters: int | None = None,
+    learning_rate: float | None = None,
+    skip_data_prep: bool = False,
+    skip_augmentation: bool = False,
+) -> Path:
+    """
+    Continue SFT training from an existing checkpoint with augmented data.
+
+    WHY THIS EXISTS:
+      After initial SFT (Stage 4), three specs have critical gaps:
+        - error_recovery: 0.060 (zero training examples)
+        - relevance_detection: 0.186 (9% no_tool in training)
+        - multi_tool_sequencing: 0.000 (can't output arrays)
+
+      This pipeline:
+        1. Generates augmented training data (error_handling, no_tool, multi_tool)
+        2. Converts augmented data to MLX format
+        3. Continues training from the SFT checkpoint at a lower LR
+
+    Args:
+        config_path: Path to SFT continuation config
+        resume_adapter: Path to existing SFT adapter to continue from
+        iters: Override iterations
+        learning_rate: Override learning rate
+        skip_data_prep: Skip MLX format conversion
+        skip_augmentation: Skip data augmentation (use existing augmented data)
+
+    Returns:
+        Path to the new adapter directory
+    """
+    console.print(
+        Panel(
+            "[bold]ToolForge SFT Continuation (Stage 4b)[/bold]\n"
+            f"Resuming from: {resume_adapter}\n"
+            f"Config: {config_path}",
+            title="Stage 4b",
+            border_style="cyan",
+        )
+    )
+
+    config = SFTConfig.from_yaml(config_path)
+    if iters is not None:
+        config.iters = iters
+    if learning_rate is not None:
+        config.learning_rate = learning_rate
+
+    # Verify the resume adapter exists
+    resume_path = Path(resume_adapter)
+    if not resume_path.exists():
+        raise FileNotFoundError(
+            f"SFT adapter not found at {resume_path}. "
+            "Run 'toolforge train sft' first to create the initial checkpoint."
+        )
+
+    # Step 1: Data augmentation
+    if not skip_augmentation:
+        console.print("\n[bold blue]Step 1/3: Data Augmentation[/bold blue]")
+        from toolforge.data.augment import run_augmentation
+        aug_stats = run_augmentation(
+            processed_dir="data/processed",
+            output_dir="data/augmented",
+        )
+        console.print(f"  Augmented: {aug_stats['combined_count']} total examples")
+    else:
+        console.print("\n[dim]Step 1/3: Skipping augmentation (--skip-augmentation)[/dim]")
+
+    # Step 2: Convert augmented data to MLX format
+    if not skip_data_prep:
+        console.print("\n[bold blue]Step 2/3: Convert Augmented Data to MLX Format[/bold blue]")
+        from toolforge.data.mlx_format import prepare_mlx_training_data
+        mlx_stats = prepare_mlx_training_data(
+            processed_dir=config.processed_dir,
+            output_dir=config.data_dir,
+        )
+        total = sum(mlx_stats.values())
+        console.print(f"  [green]Total: {total} MLX-formatted examples[/green]")
+    else:
+        console.print("\n[dim]Step 2/3: Skipping data prep (--skip-data-prep)[/dim]")
+
+    # Step 3: Continue training from checkpoint
+    console.print(f"\n[bold blue]Step 3/3: Continue SFT from {resume_adapter}[/bold blue]")
+
+    mlx_config = config.to_mlx_config()
+
+    # Critical: set resume_adapter_file to continue from SFT checkpoint
+    adapter_dir = Path(config.adapter_path)
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy the initial SFT adapters to the new output dir as starting point
+    # mlx-lm's resume_adapter_file loads weights from this path
+    console.print(f"  Resuming from adapter: {resume_adapter}")
+    console.print(f"  Output: {config.adapter_path}")
+    console.print(f"  LR: {config.learning_rate}")
+    console.print(f"  Iters: {config.iters}")
+
+    # Patch SSL for proxy environments
+    try:
+        import httpx
+        _orig = httpx.Client.__init__
+
+        def _patched(self, *a, **kw):
+            kw.setdefault("verify", False)
+            _orig(self, *a, **kw)
+
+        httpx.Client.__init__ = _patched
+    except ImportError:
+        pass
+
+    mlx_config_path = adapter_dir / "training_config.yaml"
+    with open(mlx_config_path, "w") as f:
+        yaml.dump(mlx_config, f, default_flow_style=False)
+
+    console.print(f"\n  [cyan]Starting continued training...[/cyan]")
+    start_time = time.time()
+
+    # Run mlx-lm LoRA training with resume
+    from mlx_lm import lora as mlx_lora
+    import types as _types
+
+    args = _types.SimpleNamespace(**mlx_config)
+    args.resume_adapter_file = str(resume_path / "adapters.safetensors")
+    args.test = False
+    args.test_batches = 500
+    args.config = None
+    args.optimizer = "adam"
+    args.optimizer_config = {"adam": {}}
+    args.report_to = None
+    args.project_name = None
+    args.hf_dataset = None
+    args.clear_cache_threshold = 0.5
+    args.grad_accumulation_steps = 1
+
+    mlx_lora.run(args)
+
+    elapsed = time.time() - start_time
+    console.print(f"\n  [bold green]Continued training complete in {elapsed/60:.1f} minutes[/bold green]")
+
+    # Save our config for reproducibility
+    our_config_path = adapter_dir / "toolforge_config.yaml"
+    with open(our_config_path, "w") as f:
+        yaml.dump(mlx_config, f, default_flow_style=False)
+
+    console.print(
+        Panel(
+            f"[bold green]SFT continuation complete![/bold green]\n"
+            f"Adapters saved to: {adapter_dir}\n\n"
+            f"Next steps:\n"
+            f"  1. Evaluate: toolforge eval run --backend mlx --adapter-path {adapter_dir} --stage sft_v2\n"
+            f"  2. If 4+ specs pass → proceed to DPO\n"
+            f"  3. If <4 specs pass → adjust augmentation and retrain",
             title="Done",
             border_style="green",
         )

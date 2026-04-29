@@ -194,8 +194,19 @@ def prepare_mlx_training_data(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     stats = {}
+
+    # Check for augmented training data first, fall back to standard
+    # The augmentation pipeline writes train_augmented.jsonl (combined data)
+    train_candidates = ["train_augmented.jsonl", "train.jsonl"]
+    train_src = None
+    for candidate in train_candidates:
+        candidate_path = processed_dir / candidate
+        if candidate_path.exists():
+            train_src = candidate
+            break
+
     splits = [
-        ("train.jsonl", "train.jsonl"),
+        (train_src or "train.jsonl", "train.jsonl"),
         ("val.jsonl", "valid.jsonl"),  # MLX expects "valid", we have "val"
         ("test.jsonl", "test.jsonl"),
     ]
@@ -205,9 +216,15 @@ def prepare_mlx_training_data(
         dst_path = output_dir / dst_name
 
         if not src_path.exists():
-            console.print(f"[yellow]  {src_path} not found — skipping[/yellow]")
-            stats[dst_name] = 0
-            continue
+            # For val/test, fall back to the original processed dir
+            fallback = Path("data/processed") / src_name.replace("valid", "val")
+            if fallback.exists() and fallback != src_path:
+                src_path = fallback
+                console.print(f"  [dim]Using fallback: {fallback}[/dim]")
+            else:
+                console.print(f"[yellow]  {src_path} not found — skipping[/yellow]")
+                stats[dst_name] = 0
+                continue
 
         console.print(f"  Converting {src_name} → {dst_name}")
         count = convert_dataset_to_mlx(src_path, dst_path)

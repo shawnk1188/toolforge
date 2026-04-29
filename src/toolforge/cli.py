@@ -5,7 +5,7 @@ Why Typer?
   - Auto-generates --help from function signatures and docstrings
   - Type-safe arguments with Python type hints
   - Subcommand groups (toolforge data download, toolforge eval run, etc.)
-  - Same library used in your Lumina project — consistency across portfolio
+  - Consistent with other portfolio projects
 
 Usage:
   toolforge --help           Show all commands
@@ -93,6 +93,29 @@ def data_download(
 
     stats = download_and_convert(output_dir=output_dir, max_examples=max_examples)
     console.print(f"\n[bold green]Download complete:[/bold green] {stats}")
+
+
+@data_app.command("augment")
+def data_augment(
+    processed_dir: str = typer.Option("data/processed", help="Directory with processed train/val/test JSONL"),
+    output_dir: str = typer.Option("data/augmented", help="Output directory for augmented data"),
+    error_count: int = typer.Option(400, help="Number of error_handling examples to generate"),
+    no_tool_count: int = typer.Option(300, help="Number of additional no_tool examples"),
+    multi_tool_count: int = typer.Option(100, help="Number of multi_tool reinforcement examples"),
+    seed: int = typer.Option(42, help="Random seed for reproducibility"),
+) -> None:
+    """Generate synthetic training data for underrepresented example types (error, no-tool, multi-tool)."""
+    from toolforge.data.augment import run_augmentation
+
+    stats = run_augmentation(
+        processed_dir=processed_dir,
+        output_dir=output_dir,
+        error_count=error_count,
+        no_tool_count=no_tool_count,
+        multi_tool_count=multi_tool_count,
+        seed=seed,
+    )
+    console.print(f"\n[bold green]Augmentation complete:[/bold green] {stats['combined_count']} total examples")
 
 
 @data_app.command("prepare")
@@ -201,12 +224,42 @@ def train_sft(
     )
 
 
+@train_app.command("sft-continue")
+def train_sft_continue(
+    config: str = typer.Option("configs/training/sft_continue.yaml", help="SFT continuation config path"),
+    resume_adapter: str = typer.Option("artifacts/sft/adapters", help="Path to SFT adapter to continue from"),
+    iters: int = typer.Option(None, help="Override training iterations"),
+    learning_rate: float = typer.Option(None, "--lr", help="Override learning rate"),
+    skip_data_prep: bool = typer.Option(False, help="Skip MLX format conversion"),
+    skip_augmentation: bool = typer.Option(False, help="Skip data augmentation (use existing)"),
+) -> None:
+    """Continue SFT training from an existing checkpoint with augmented data (Stage 4b)."""
+    from toolforge.training.sft import run_sft_continue
+
+    run_sft_continue(
+        config_path=config,
+        resume_adapter=resume_adapter,
+        iters=iters,
+        learning_rate=learning_rate,
+        skip_data_prep=skip_data_prep,
+        skip_augmentation=skip_augmentation,
+    )
+
+
 @train_app.command("dpo")
 def train_dpo(
     config: str = typer.Option("configs/training/dpo.yaml", help="DPO config path"),
+    iters: int = typer.Option(None, help="Override training iterations"),
+    skip_pair_gen: bool = typer.Option(False, help="Skip preference pair generation"),
 ) -> None:
     """Run Direct Preference Optimization on SFT checkpoint."""
-    console.print("\n[yellow]⚠ DPO training will be implemented in Stage 5[/yellow]\n")
+    from toolforge.training.dpo import run_dpo_training
+
+    run_dpo_training(
+        config_path=config,
+        iters=iters,
+        skip_pair_gen=skip_pair_gen,
+    )
 
 
 # --- Serve commands ---
@@ -216,11 +269,42 @@ app.add_typer(serve_app, name="serve")
 
 @serve_app.command("start")
 def serve_start(
-    model_path: str = typer.Option(..., help="Path to merged model or adapter"),
+    model_path: str = typer.Option(None, help="HF model ID or path"),
+    adapter_path: str = typer.Option(None, help="Path to LoRA adapter directory"),
+    backend: str = typer.Option("mlx", help="Inference backend: mlx, ollama, dummy"),
+    host: str = typer.Option("0.0.0.0", help="Server host"),
     port: int = typer.Option(8000, help="Server port"),
 ) -> None:
-    """Start the FastAPI inference server."""
-    console.print("\n[yellow]⚠ Serving will be implemented in Stage 6[/yellow]\n")
+    """Start the FastAPI inference server for tool-calling."""
+    from toolforge.serving.api import run_server
+
+    run_server(
+        model_id=model_path or "mlx-community/Llama-3.2-3B-Instruct-4bit",
+        adapter_path=adapter_path,
+        backend=backend,
+        host=host,
+        port=port,
+    )
+
+
+@serve_app.command("demo")
+def serve_demo(
+    model_path: str = typer.Option(None, help="HF model ID or path"),
+    adapter_path: str = typer.Option(None, help="Path to LoRA adapter directory"),
+    backend: str = typer.Option("mlx", help="Inference backend: mlx, ollama, dummy"),
+    port: int = typer.Option(7860, help="Gradio server port"),
+    share: bool = typer.Option(False, help="Create a public Gradio share link"),
+) -> None:
+    """Launch the interactive Gradio demo for tool-calling."""
+    from toolforge.serving.demo import run_demo
+
+    run_demo(
+        model_id=model_path or "mlx-community/Llama-3.2-3B-Instruct-4bit",
+        adapter_path=adapter_path,
+        backend=backend,
+        port=port,
+        share=share,
+    )
 
 
 if __name__ == "__main__":

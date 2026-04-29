@@ -7,6 +7,10 @@
 > spec-driven development: 6 behavioral specifications defined before training,
 > with a full eval harness that runs as a CI gate.
 
+## Documentation
+
+- **[Architecture & System Design](docs/ARCHITECTURE.md)** — Comprehensive deep-dive into system architecture, engineering decisions, training pipeline, debugging stories, and interview-ready talking points.
+
 ## Why This Project Exists
 
 In 2026, every company building agentic AI systems hits the same wall: base models
@@ -61,7 +65,7 @@ Spec-Driven:  Define specs → Measure baseline → Train → Verify specs pass
 
 **Key design decisions:**
 - **Pydantic for spec validation** — catch invalid YAML at load time, not at evaluation time
-  (same "validate at boundary" pattern used in the Lumina project)
+  (the "validate at boundary" pattern — fail fast on bad config)
 - **Metric registry pattern** — adding a new metric requires only: write the function, add to enum,
   register in `METRIC_REGISTRY`. No framework changes needed.
 - **Model-agnostic harness** — the harness accepts any `ModelFn` callable. Whether we evaluate
@@ -128,7 +132,7 @@ toolforge data validate data/processed/train.jsonl
 # Format for Llama 3.2 training
 toolforge data format data/processed/train.jsonl
 
-# Run all 334 tests
+# Run all 373 tests
 make test
 ```
 
@@ -176,7 +180,7 @@ toolforge eval run --backend mlx --max-samples 5
 # Test with dummy adapter (instant, all specs fail)
 toolforge eval run --backend dummy --max-samples 5
 
-# Run all 264 tests
+# Run all 373 tests
 make test
 ```
 
@@ -251,28 +255,110 @@ toolforge train sft --iters 10              # quick 10-iteration test
 # Evaluate SFT checkpoint
 toolforge eval run --backend mlx --adapter-path artifacts/sft/adapters --max-samples 20
 
-# Run all 334 tests
+# Run all 373 tests
 make test
 ```
 
-### Stage 5: Preference Tuning (DPO)
+### Stage 5: Preference Tuning (DPO) ✅ ← **CURRENT**
 
-**Goal:** DPO training targeting the remaining failing specs.
+**Goal:** DPO training targeting the 4 failing specs using custom MLX implementation.
 
-- Generate preference pairs from SFT model failures
-- DPO training on SFT checkpoint using TRL `DPOTrainer`
-- Expected: 6/6 specs pass after DPO
-- Full comparison report: Base → SFT → SFT+DPO
+**What was built:**
+- **Custom DPO trainer in MLX** (`training/dpo.py`) — Full implementation of Direct Preference Optimization from scratch since mlx-lm doesn't support DPO natively. Includes the DPO loss function, gradient computation via `nn.value_and_grad`, and memory-efficient training with pre-computed reference log probs.
+- **Preference pair generator** (`training/preference.py`) — Runs the SFT model on eval datasets, compares outputs to ground truth, and creates (prompt, chosen, rejected) triples from model failures. The model learns from its OWN mistakes.
+- **Memory-efficient design** — Pre-computes all reference model log probs once, unloads the reference model, then trains with only the policy model in memory. Cuts peak memory from ~12GB to ~6GB on Apple Silicon.
+- **DPO config** (`configs/training/dpo.yaml`) — Fully documented hyperparameters with rationale.
+- **373 unit tests** (25 new for DPO, 14 for serving API/CLI/demo tools)
+- **CLI wired up** — `toolforge train dpo` with `--iters` and `--skip-pair-gen` options
 
-### Stage 6: Serving & Demo
+**Preference Pair Generation:**
+
+| Failing Spec | Examples | SFT Correct | Pairs | SFT Accuracy |
+|-------------|----------|-------------|-------|-------------|
+| argument_accuracy | 50 | 40 | **10** | 80% |
+| error_recovery | 50 | 6 | **44** | 12% |
+| multi_tool_sequencing | 50 | 0 | **50** | 0% |
+| relevance_detection | 43 | 8 | **35** | 19% |
+| **Total** | 193 | 54 | **139** | — |
+
+**DPO Training Details:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Framework | Custom MLX DPO (from scratch) | mlx-lm only supports SFT LoRA, not DPO |
+| Beta | 0.1 | Standard DPO temperature (Rafailov et al., 2023) |
+| LR | 5e-6 | Standard DPO LR; prevents catastrophic forgetting |
+| Iterations | 300 | ~2 epochs over 139 pairs; converges before overfitting |
+| Batch size | 1 | DPO needs forward+backward for 2 sequences per step |
+| Max seq length | 512 | Most tool calls <512 tokens; enables ~16s/step on M1 Pro |
+
+**Bug Fix Journey — Debugging Zero Gradients:**
+
+One of the most instructive debugging sequences in the project. DPO loss was stuck at exactly 0.6931 (ln(2)) for 30+ iterations with gradient norm = 0.000000:
+
+1. **Increased LR from 5e-6 → 1e-4** — Still zero. Not a learning rate issue.
+2. **Isolated gradient flow** — `sum(log_probs)` had gradients, but `chosen_logp - rejected_logp` didn't.
+3. **Root cause**: `DPODataset.__getitem__()` right-truncated sequences to `max_length=512`. The tool schema in the prompt consumed >500 tokens, so the actual responses (where chosen ≠ rejected) got cut off. All 139 pairs had `chosen_ids == rejected_ids` — making `reward_margin = 0` exactly, with zero gradient by definition.
+4. **Fix**: Left-truncate the prompt (keep the end with the user query) to ensure the response is preserved in full. After fix: 224/224 gradient tensors nonzero.
+
+**Key design decisions:**
+- **Custom DPO over library** — mlx-lm doesn't have DPO. Implementing from scratch shows deep understanding of the algorithm and demonstrates ability to implement research papers.
+- **Pre-computed reference log probs** — Standard DPO loads two full models. On M1 Pro 32GB, that leaves insufficient memory for forward passes. Pre-computing reference log probs and unloading the reference model halves peak memory.
+- **Preference pairs from own failures** — More effective than synthetic negatives. The model learns to correct its ACTUAL failure modes, not hypothetical ones.
+- **LoRA-only training** — Freeze quantized base weights, train only LoRA parameters (6.9M / 509M). Prevents quantized weight gradient crashes and keeps training efficient.
+- **Left-truncation** — Prompt gets truncated from the left (keeps the user query at the end), ensuring chosen/rejected responses are fully preserved. Critical for DPO where the response is the signal.
+
+**How to verify:**
+```bash
+# Generate preference pairs from SFT failures (~20 min)
+toolforge train dpo
+
+# DPO training only (skip pair generation)
+toolforge train dpo --skip-pair-gen
+
+# Quick test (10 iterations)
+toolforge train dpo --iters 10 --skip-pair-gen
+
+# Evaluate DPO checkpoint
+toolforge eval run --backend mlx --adapter-path artifacts/dpo/adapters --stage dpo --max-samples 50
+
+# Run all 373 tests
+make test
+```
+
+### Stage 6: Serving & Demo ✅
 
 **Goal:** Production inference API with interactive demo.
 
-- Merge LoRA adapters into base model
-- FastAPI inference endpoint with tool-calling schema
-- Streamlit/Gradio interactive demo
-- Model card with training curves and spec results
-- Podman deployment
+**FastAPI Inference Server:**
+
+```bash
+# Start the API server (loads model + LoRA adapters)
+toolforge serve start --adapter-path artifacts/dpo/adapters --port 8000
+
+# OpenAI-compatible tool-calling endpoint
+curl -X POST http://localhost:8000/v1/tool-call \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What is the weather in Tokyo?",
+    "tools": [{"name": "get_weather", "description": "Get weather", "parameters": {}}]
+  }'
+```
+
+**API Design:** Mirrors OpenAI's function calling format so clients can switch between GPT-4o and ToolForge with minimal changes. Auto-generates OpenAPI docs at `/docs`.
+
+**Gradio Interactive Demo:**
+
+```bash
+# Launch the interactive demo UI
+toolforge serve demo --adapter-path artifacts/dpo/adapters --port 7860
+```
+
+5 built-in demo tools (weather, search, calculate, email, stock price) with example queries. The model decides whether to call a tool or respond with text — try "Tell me a joke" to see it correctly refuse to call a tool.
+
+**Endpoints:**
+- `GET /health` — Verify model is loaded and ready
+- `POST /v1/tool-call` — Run tool-calling inference (single + multi-tool + text responses)
 
 ## Tech Stack
 
@@ -325,7 +411,7 @@ source .venv/bin/activate
 # Validate specs are well-formed
 toolforge eval specs
 
-# Run all 334 tests
+# Run all 373 tests
 make test
 
 # See all available commands
